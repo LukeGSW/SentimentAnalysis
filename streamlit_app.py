@@ -4,14 +4,13 @@ import numpy as np
 from datetime import datetime, timedelta
 import json
 import requests
-from typing import Dict, List, Optional
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy import stats
 import traceback
 
 # ============================================================================
-# 1. CONFIGURAZIONE E STILI
+# 1. CONFIGURAZIONE E STILI (CSS ORIGINALE INTEGRATO)
 # ============================================================================
 st.set_page_config(
     page_title="Kriterion Quant Dashboard",
@@ -20,42 +19,70 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS ottimizzato per evitare conflitti di rendering
+# CSS per replicare esattamente lo stile della dashboard HTML
 st.markdown("""
 <style>
-    /* Card Stile */
+    /* Generali */
+    .main-header {
+        background: linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%);
+        padding: 20px;
+        border-radius: 10px;
+        color: white;
+        margin-bottom: 20px;
+    }
+    .main-header h1 { color: white; margin: 0; font-size: 2rem; }
+    .header-meta { display: flex; gap: 15px; margin-top: 10px; font-size: 0.9rem; }
+    .header-badge { background: rgba(255,255,255,0.2); padding: 5px 12px; border-radius: 15px; }
+    
+    /* Cards */
     div.metric-card {
         background-color: #ffffff;
         border: 1px solid #e0e0e0;
         border-radius: 8px;
         padding: 15px;
         text-align: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        margin-bottom: 10px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        height: 100%;
     }
-    div.metric-value { font-size: 1.8rem; font-weight: 700; color: #1f77b4; }
-    div.metric-label { font-size: 0.85rem; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+    .card-title { font-size: 0.85rem; color: #666; text-transform: uppercase; margin-bottom: 10px; font-weight: 600; }
+    .card-value { font-size: 1.8rem; font-weight: 700; color: #333; margin: 10px 0; }
+    .card-sub { font-size: 0.85rem; color: #666; }
+    .signal-badge { padding: 5px 15px; border-radius: 20px; color: white; font-weight: bold; }
     
-    /* Fattori */
-    div.factor-box { padding: 8px 12px; border-radius: 4px; margin-bottom: 6px; font-size: 0.9rem; line-height: 1.4; }
-    div.bullish { background-color: #e8f5e9; color: #2e7d32; border-left: 4px solid #2e7d32; }
-    div.bearish { background-color: #ffebee; color: #c62828; border-left: 4px solid #c62828; }
-    div.neutral { background-color: #f5f5f5; color: #616161; border-left: 4px solid #757575; }
-    
-    /* Narrativa */
-    div.narrative-box {
-        background-color: #e3f2fd;
-        border-left: 5px solid #2196f3;
-        padding: 15px;
-        border-radius: 4px;
-        color: #0d47a1;
-        font-size: 1rem;
-        margin-bottom: 20px;
+    /* Range Bar Styles */
+    .range-container {
+        background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; margin: 20px 0;
     }
+    .range-bar-bg {
+        height: 25px;
+        background: linear-gradient(to right, #dc3545 0%, #ffc107 50%, #28a745 100%);
+        border-radius: 12px;
+        position: relative;
+        margin: 15px 0;
+    }
+    .range-marker {
+        position: absolute; top: -5px; width: 4px; height: 35px; background: #333;
+        transform: translateX(-50%); border: 1px solid white;
+    }
+    .range-stats { display: flex; justify-content: space-between; font-size: 0.9rem; text-align: center; margin-top: 10px; }
     
-    /* Override Streamlit Elements */
-    .stProgress > div > div > div > div { background-color: #1a73e8; }
-    h1, h2, h3 { color: #1a73e8; }
+    /* Narrative & Factors */
+    .narrative-box {
+        background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+        border-left: 5px solid #1976d2; padding: 15px; border-radius: 5px; color: #0d47a1; margin-bottom: 20px;
+    }
+    .factor-item { padding: 8px; border-bottom: 1px solid #eee; font-size: 0.9rem; }
+    .bullish { color: #2e7d32; } .bearish { color: #c62828; } .neutral { color: #616161; }
+    
+    /* Detailed Table */
+    table.metrics-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    table.metrics-table th { background-color: #f8f9fa; color: #666; padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6; }
+    table.metrics-table td { padding: 10px; border-bottom: 1px solid #eee; color: #333; }
+    .section-header { background-color: #1a73e8; color: white; padding: 8px; font-weight: bold; text-transform: uppercase; font-size: 0.85rem; }
+    
+    /* Charts */
+    .chart-box { background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 15px; margin-bottom: 20px; }
+    
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,7 +92,7 @@ st.markdown("""
 try:
     EODHD_API_KEY = st.secrets["EODHD_API_KEY"]
 except:
-    st.error("❌ EODHD_API_KEY mancante nei secrets. Configurala nelle impostazioni dell'app.")
+    st.error("❌ EODHD_API_KEY mancante nei secrets.")
     st.stop()
 
 EODHD_BASE_URL = "https://eodhd.com/api"
@@ -80,371 +107,408 @@ CONFIG = {
 }
 
 EXCHANGE_MAP = {
-    'US': {'type': 'equity', 'name': 'US Stock', 'currency': 'USD'},
-    'MI': {'type': 'equity', 'name': 'Italian Stock', 'currency': 'EUR'},
-    'L': {'type': 'equity', 'name': 'London Stock', 'currency': 'GBP'},
-    'PA': {'type': 'equity', 'name': 'Paris Stock', 'currency': 'EUR'},
-    'F': {'type': 'equity', 'name': 'Frankfurt Stock', 'currency': 'EUR'},
-    'CC': {'type': 'crypto', 'name': 'Cryptocurrency', 'currency': 'USD'},
-    'INDX': {'type': 'index', 'name': 'Index', 'currency': 'USD'},
-    'FOREX': {'type': 'forex', 'name': 'Forex', 'currency': 'Various'}
+    'US': {'type': 'Equity', 'currency': 'USD'},
+    'MI': {'type': 'Equity', 'currency': 'EUR'},
+    'L': {'type': 'Equity', 'currency': 'GBP'},
+    'PA': {'type': 'Equity', 'currency': 'EUR'},
+    'F': {'type': 'Equity', 'currency': 'EUR'},
+    'CC': {'type': 'Crypto', 'currency': 'USD'},
+    'INDX': {'type': 'Index', 'currency': 'USD'}
 }
 
 # ============================================================================
-# 3. FUNZIONI DATA FETCHING
+# 3. FUNZIONI DATA FETCHING & CALCOLO (CORE LOGIC)
 # ============================================================================
 
 def api_request(url, params):
     try:
         r = requests.get(url, params=params, timeout=15)
         if r.status_code == 200: return r.json()
-    except Exception as e:
-        st.warning(f"Errore connessione API: {e}")
+    except: pass
     return None
 
 @st.cache_data(ttl=3600)
-def fetch_ohlcv(ticker, days):
+def fetch_data(ticker):
+    # OHLCV
     end = datetime.now()
-    start = end - timedelta(days=days)
-    url = f"{EODHD_BASE_URL}/eod/{ticker}"
-    data = api_request(url, {'api_token': EODHD_API_KEY, 'from': start.strftime('%Y-%m-%d'), 'to': end.strftime('%Y-%m-%d'), 'fmt': 'json'})
-    if not data: return None
-    try:
-        df = pd.DataFrame(data)
-        df['date'] = pd.to_datetime(df['date'])
-        df = df.set_index('date').sort_index()
-        df.columns = [c.lower() for c in df.columns]
-        # Pulizia dati zero volume
-        return df[df['volume'] > 0]
-    except:
-        return None
+    start = end - timedelta(days=CONFIG['MIN_TRADING_DAYS'] + 200)
+    url_ohlcv = f"{EODHD_BASE_URL}/eod/{ticker}"
+    data_ohlcv = api_request(url_ohlcv, {'api_token': EODHD_API_KEY, 'from': start.strftime('%Y-%m-%d'), 'fmt': 'json'})
+    
+    if not data_ohlcv: return None, None, None
+    
+    df = pd.DataFrame(data_ohlcv)
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.set_index('date').sort_index()
+    df.columns = [c.lower() for c in df.columns]
+    df = df[df['volume'] > 0] # Filter zero volume
 
-@st.cache_data(ttl=3600)
-def fetch_sentiment(ticker):
+    # Sentiment
     symbol = ticker.split('.')[0]
-    end = datetime.now()
-    start = end - timedelta(days=30)
-    url = f"{EODHD_BASE_URL}/sentiments"
-    data = api_request(url, {'api_token': EODHD_API_KEY, 's': symbol, 'from': start.strftime('%Y-%m-%d'), 'to': end.strftime('%Y-%m-%d')})
+    url_sent = f"{EODHD_BASE_URL}/sentiments"
+    data_sent = api_request(url_sent, {'api_token': EODHD_API_KEY, 's': symbol, 'from': (end - timedelta(days=30)).strftime('%Y-%m-%d')})
     
-    if not data: return None
+    # News
+    url_news = f"{EODHD_BASE_URL}/news"
+    data_news = api_request(url_news, {'api_token': EODHD_API_KEY, 's': ticker, 'limit': 10})
     
-    # Logica robusta per estrarre i dati corretti dal JSON EODHD
-    target_data = None
-    if isinstance(data, dict):
-        keys = [k for k in data.keys() if k.lower() == symbol.lower()]
-        if keys: target_data = data[keys[0]]
-        elif len(data) > 0: target_data = data[list(data.keys())[0]]
-    
-    # Se arriva una lista di dati storici, facciamo la media
-    if isinstance(target_data, list):
-        valid_scores = []
-        for x in target_data:
-            val = x.get('normalized') or x.get('score')
-            if val is not None: valid_scores.append(float(val))
+    return df, data_sent, data_news
+
+def process_sentiment(data_sent, symbol):
+    score = 50.0
+    label = "Neutral"
+    if data_sent:
+        target = None
+        if isinstance(data_sent, dict):
+            keys = [k for k in data_sent.keys() if k.lower() == symbol.lower()]
+            if keys: target = data_sent[keys[0]]
+            elif len(data_sent) > 0: target = data_sent[list(data_sent.keys())[0]]
         
-        if valid_scores:
-            avg_score = sum(valid_scores) / len(valid_scores)
-            return {'normalized': avg_score, 'count': len(valid_scores)}
-        return None
+        if isinstance(target, list):
+            vals = [float(x.get('normalized', 0)) for x in target if x.get('normalized') is not None]
+            if vals:
+                raw_avg = sum(vals) / len(vals)
+                score = ((max(-1, min(1, raw_avg)) + 1) / 2) * 100
     
-    return target_data
+    if score >= 65: label = "Bullish"
+    elif score <= 35: label = "Bearish"
+    return score, label
 
-@st.cache_data(ttl=3600)
-def fetch_news(ticker):
-    url = f"{EODHD_BASE_URL}/news"
-    return api_request(url, {'api_token': EODHD_API_KEY, 's': ticker, 'limit': 50})
-
-# ============================================================================
-# 4. CALCOLI (Logica Notebook)
-# ============================================================================
-
-def calculate_technical_indicators(df):
-    # EMA
+def calculate_metrics(df, sent_score, sent_label, news_data):
+    # Technicals
     df['ema'] = df['close'].ewm(span=CONFIG['EMA_PERIOD'], adjust=False).mean()
     
-    # RSI
     delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-    avg_gain = gain.ewm(alpha=1/CONFIG['RSI_PERIOD'], min_periods=CONFIG['RSI_PERIOD'], adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/CONFIG['RSI_PERIOD'], min_periods=CONFIG['RSI_PERIOD'], adjust=False).mean()
-    rs = avg_gain / avg_loss
-    df['rsi'] = 100 - (100 / (1 + rs))
+    gain = delta.where(delta>0, 0.0).ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+    loss = -delta.where(delta<0, 0.0).ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+    rs = gain/loss
+    df['rsi'] = 100 - (100/(1+rs))
     
-    # ATR & HV
+    df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
+    df['hv20'] = df['log_ret'].rolling(20).std() * np.sqrt(252)
+    df['hv60'] = df['log_ret'].rolling(60).std() * np.sqrt(252)
+    
     h, l, c = df['high'], df['low'], df['close']
     tr = pd.concat([h-l, (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
-    df['atr'] = tr.ewm(span=CONFIG['ATR_PERIOD'], adjust=False).mean()
+    df['atr'] = tr.ewm(span=14, adjust=False).mean()
     
-    log_ret = np.log(c / c.shift(1))
-    df['hv20'] = log_ret.rolling(20).std() * np.sqrt(252)
-    df['hv60'] = log_ret.rolling(60).std() * np.sqrt(252)
-    
-    # ROC
-    for p in CONFIG['ROC_PERIODS']:
-        df[f'roc_{p}'] = ((c - c.shift(p)) / c.shift(p)) * 100
-        
-    return df
-
-def analyze_asset(df, sent_data, news_list, ticker):
+    # Current Values
     last = df.iloc[-1]
     prev = df.iloc[-2]
     
-    # Metrics
-    ema_dist_pct = ((last['close'] - last['ema']) / last['ema']) * 100
-    ema_pos = "ABOVE" if last['close'] > last['ema'] else "BELOW"
-    
-    rsi_val = last['rsi']
-    rsi_zone = "Oversold" if rsi_val < 30 else "Overbought" if rsi_val > 70 else "Neutral"
-    
-    # Volatility
-    atr_series = df['atr'].dropna().iloc[-252:]
-    # Fix per percentile se dati insufficienti
-    if len(atr_series) > 10:
-        atr_p = stats.percentileofscore(atr_series, last['atr'])
-    else:
-        atr_p = 50
-    vol_regime = "EXTREME" if atr_p > 90 else "HIGH" if atr_p > 70 else "LOW" if atr_p < 30 else "NORMAL"
-    
     # Momentum
-    roc_vals = [last[f'roc_{p}'] for p in CONFIG['ROC_PERIODS']]
-    if all(x > 0 for x in roc_vals): mom_align = "Bullish"
-    elif all(x < 0 for x in roc_vals): mom_align = "Bearish"
-    else: mom_align = "Transitional"
+    roc = {}
+    for p in [10, 21, 63]:
+        roc[p] = ((last['close'] - df['close'].shift(p).iloc[-1]) / df['close'].shift(p).iloc[-1]) * 100
+    
+    mom_align = "Transitional"
+    if all(roc[p] > 0 for p in roc): mom_align = "Bullish Aligned"
+    elif all(roc[p] < 0 for p in roc): mom_align = "Bearish Aligned"
     
     # Structure
-    high_52 = df['high'].iloc[-252:].max()
-    low_52 = df['low'].iloc[-252:].min()
-    # Safety division by zero
-    rng = high_52 - low_52
-    pos_range = ((last['close'] - low_52) / rng * 100) if rng > 0 else 50
-    # Clamping per evitare errori st.progress
-    pos_range_clamped = max(0, min(100, int(pos_range)))
+    high52 = df['high'].iloc[-252:].max()
+    low52 = df['low'].iloc[-252:].min()
+    pos_range = ((last['close'] - low52) / (high52 - low52)) * 100
+    pos_range = max(0, min(100, pos_range))
     
     dd_curr = ((last['close'] / df['close'].expanding().max().iloc[-1]) - 1) * 100
+    max_dd = ((df['close'] / df['close'].expanding().max()) - 1).min() * 100
     
-    # Sentiment
-    sent_score_norm = 50.0
-    if sent_data:
-        val = sent_data.get('normalized', sent_data.get('score', 0))
-        # Normalizzazione -1..1 a 0..100
-        try:
-            val_f = float(val)
-            sent_score_norm = ((max(-1, min(1, val_f)) + 1) / 2) * 100
-        except: pass
-        
-    # News Spike
-    news_spike = False
-    velocity = 1.0
-    if news_list:
-        now = datetime.now()
-        c7 = sum(1 for n in news_list if (now - pd.to_datetime(n['date'][:10])).days <= 7)
-        c30 = sum(1 for n in news_list if (now - pd.to_datetime(n['date'][:10])).days <= 30)
-        avg = c30 / 30 if c30 else 0
-        velocity = c7 / (avg * 7) if avg else 1.0
-        news_spike = velocity > CONFIG['NEWS_SPIKE_THRESHOLD']
-
-    # Scoring
-    s_ema = 50 + (min(35, ema_dist_pct * 3) if ema_dist_pct > 0 else max(-35, ema_dist_pct * 3))
-    s_rsi = 50 + (rsi_val - 50)
-    s_mom = 75 if mom_align == "Bullish" else 25 if mom_align == "Bearish" else 50
+    # Volatility Regime
+    atr_p = stats.percentileofscore(df['atr'].dropna().iloc[-252:], last['atr'])
+    vol_regime = "Normal"
+    if atr_p > 90: vol_regime = "Extreme"
+    elif atr_p > 70: vol_regime = "High"
+    elif atr_p < 30: vol_regime = "Low"
     
-    tech_score = (max(0,min(100,s_ema)) * CONFIG['W_EMA']) + \
-                 (max(0,min(100,s_rsi)) * CONFIG['W_RSI']) + \
-                 (max(0,min(100,s_mom)) * CONFIG['W_MOMENTUM'])
-                 
-    final_sent = sent_score_norm
-    if news_spike:
-        final_sent += 10 if sent_score_norm > 60 else -10 if sent_score_norm < 40 else 0
-        
-    raw_comp = (tech_score * CONFIG['W_TECHNICAL']) + (final_sent * CONFIG['W_SENTIMENT'])
-    adj_vol = 0.8 if vol_regime == "EXTREME" else 1.0
+    # Volume
+    vol_p = stats.percentileofscore(df['volume'].dropna().iloc[-252:], last['volume'])
     
-    final_score = max(0, min(100, raw_comp * adj_vol))
+    # Composite Score
+    ema_dist = ((last['close'] - last['ema'])/last['ema'])*100
     
-    if final_score >= 80: signal = "STRONG BUY"
-    elif final_score >= 65: signal = "BUY"
-    elif final_score >= 45: signal = "NEUTRAL"
-    elif final_score >= 30: signal = "SELL"
-    else: signal = "STRONG SELL"
+    s_tech = 50
+    if ema_dist > 0: s_tech += 20
+    else: s_tech -= 20
+    if last['rsi'] < 30: s_tech += 15 # Mean rev
+    elif last['rsi'] > 70: s_tech -= 15
+    if "Bullish" in mom_align: s_tech += 15
+    elif "Bearish" in mom_align: s_tech -= 15
+    s_tech = max(0, min(100, s_tech))
     
-    confidence = 0.5 + (0.1 if mom_align != "Transitional" else 0)
+    raw_comp = (s_tech * 0.55) + (sent_score * 0.45)
+    final_score = raw_comp # Simplified
     
-    # Factors
-    bullish, bearish, neutral = [], [], []
-    if ema_pos == "ABOVE": bullish.append(f"Prezzo sopra EMA125 (+{ema_dist_pct:.1f}%)")
-    else: bearish.append(f"Prezzo sotto EMA125 ({ema_dist_pct:.1f}%)")
-    if rsi_val < 30: bullish.append(f"RSI Oversold ({rsi_val:.1f})")
-    elif rsi_val > 70: bearish.append(f"RSI Overbought ({rsi_val:.1f})")
-    if mom_align == "Bullish": bullish.append("Momentum Bullish")
-    elif mom_align == "Bearish": bearish.append("Momentum Bearish")
-    else: neutral.append("Momentum in transizione")
-    
-    narrative = f"Analisi di {ticker}: Bias **{signal}** (Score: {final_score:.1f}). Confidence: {confidence:.0%}. "
-    narrative += f"Il prezzo è al {pos_range:.1f}% del range 52w. Regime volatilità: {vol_regime}."
+    signal = "NEUTRAL"
+    color = "#ffc107" # yellow
+    if final_score >= 65: signal = "BUY"; color = "#28a745"
+    elif final_score >= 80: signal = "STRONG BUY"; color = "#20c997"
+    elif final_score <= 35: signal = "SELL"; color = "#fd7e14"
+    elif final_score <= 20: signal = "STRONG SELL"; color = "#dc3545"
     
     return {
-        'scores': {'final': final_score, 'tech': tech_score, 'sent': final_sent},
-        'signal': signal, 'confidence': confidence,
-        'metrics': {
-            'close': last['close'], 'change': ((last['close']/prev['close'])-1)*100,
-            'ema_dist': ema_dist_pct, 'rsi': rsi_val, 'rsi_zone': rsi_zone,
-            'vol_regime': vol_regime, 'pos_range': pos_range, 'pos_range_clamped': pos_range_clamped,
-            'dd': dd_curr, 'hv_ratio': (last['hv20']/last['hv60'] if last['hv60'] else 1),
-            'mom_align': mom_align, 'roc': roc_vals
-        },
-        'factors': {'bullish': bullish, 'bearish': bearish, 'neutral': neutral},
-        'narrative': narrative,
-        'news_metrics': {'velocity': velocity, 'spike': news_spike}
+        'price': last['close'], 'change': ((last['close']-prev['close'])/prev['close'])*100,
+        'change_abs': last['close']-prev['close'],
+        'ema': last['ema'], 'ema_dist': ema_dist,
+        'rsi': last['rsi'], 'vol_p': vol_p,
+        'hv20': last['hv20'], 'hv60': last['hv60'],
+        'atr': last['atr'], 'atr_pct': (last['atr']/last['close'])*100,
+        'high52': high52, 'low52': low52, 'pos_range': pos_range,
+        'dd': dd_curr, 'max_dd': max_dd,
+        'roc': roc, 'mom_align': mom_align,
+        'vol_regime': vol_regime,
+        'scores': {'tech': s_tech, 'sent': sent_score, 'final': final_score},
+        'signal': {'label': signal, 'color': color, 'conf': 0.65}, # Fixed conf for demo
+        'factors': {
+            'bullish': [f"Prezzo > EMA ({ema_dist:.1f}%)" if ema_dist>0 else None, f"Volume Alto (P{vol_p:.0f})" if vol_p>70 else None],
+            'bearish': [f"RSI Overbought ({last['rsi']:.0f})" if last['rsi']>70 else None, "Trend Bearish" if ema_dist<0 else None],
+            'neutral': ["Volatilità Bassa" if vol_regime=="Low" else None]
+        }
     }
 
 # ============================================================================
-# 5. APP MAIN UI
+# 4. GRAFICI PLOTLY (IDENTICI ALL'HTML)
+# ============================================================================
+
+def make_gauge(value, title, color_steps):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number", value=value, title={'text': title, 'font': {'size': 14}},
+        gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#1a73e8"},
+               'steps': color_steps}
+    ))
+    fig.update_layout(height=200, margin=dict(l=10,r=10,t=40,b=10))
+    return fig
+
+def make_price_chart(df):
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
+    fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['ema'], line=dict(color='#ff9800', width=2), name='EMA 125'), row=1, col=1)
+    colors = ['#26a69a' if c >= o else '#ef5350' for c, o in zip(df['close'], df['open'])]
+    fig.add_trace(go.Bar(x=df.index, y=df['volume'], marker_color=colors, name='Vol'), row=2, col=1)
+    fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=10,b=10))
+    return fig
+
+def make_rsi_chart(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index[-150:], y=df['rsi'].iloc[-150:], line=dict(color='#7b1fa2')))
+    fig.add_hline(y=70, line_dash="dot", line_color="red"); fig.add_hline(y=30, line_dash="dot", line_color="green")
+    fig.update_layout(height=200, margin=dict(l=10,r=10,t=30,b=10), title="RSI 14")
+    return fig
+
+def make_mom_chart(roc):
+    fig = go.Figure(go.Bar(x=['10d', '21d', '63d'], y=[roc[10], roc[21], roc[63]], 
+                           marker_color=['#26a69a' if x>0 else '#ef5350' for x in [roc[10], roc[21], roc[63]]]))
+    fig.update_layout(height=200, margin=dict(l=10,r=10,t=30,b=10), title="Momentum ROC")
+    return fig
+
+def make_vol_chart(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index[-150:], y=df['hv20'].iloc[-150:]*100, name='HV 20', line=dict(color='#1a73e8')))
+    fig.add_trace(go.Scatter(x=df.index[-150:], y=df['hv60'].iloc[-150:]*100, name='HV 60', line=dict(color='#ff9800')))
+    fig.update_layout(height=200, margin=dict(l=10,r=10,t=30,b=10), title="Historical Volatility %")
+    return fig
+
+# ============================================================================
+# 5. APP PRINCIPALE (LAYOUT)
 # ============================================================================
 
 def main():
+    # --- SIDEBAR ---
     st.sidebar.title("Kriterion Quant")
-    st.sidebar.caption("Financial Sentiment Dashboard v2.0")
+    st.sidebar.caption("v2.0 Dashboard")
+    TICKER = st.sidebar.text_input("Ticker:", value="AAPL.US").upper()
     
-    with st.sidebar.expander("ℹ️ Guida Ticker"):
-        st.markdown("- **US:** AAPL.US\n- **EU:** ENI.MI, SAP.F\n- **Crypto:** BTC-USD.CC")
+    if not TICKER: return
 
-    TICKER = st.sidebar.text_input("Ticker:", value="AAPL.US").upper().strip()
-
-    if TICKER:
-        try:
-            with st.spinner(f"Analisi di {TICKER} in corso..."):
-                # Fetch Data
-                df = fetch_ohlcv(TICKER, CONFIG['MIN_TRADING_DAYS'] + 100)
-                if df is None or len(df) < 50:
-                    st.error(f"Dati non disponibili o insufficienti per {TICKER}. Verifica il suffisso.")
-                    return
-
-                # Calculations
-                df = calculate_technical_indicators(df)
-                sent = fetch_sentiment(TICKER)
-                news = fetch_news(TICKER)
-                res = analyze_asset(df, sent, news, TICKER)
-                
-                # --- HEADER ---
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Asset", TICKER)
-                c2.metric("Prezzo", f"{res['metrics']['close']:.2f}", f"{res['metrics']['change']:+.2f}%")
-                c3.metric("Signal", res['signal'], f"Conf: {res['confidence']:.0%}")
-                c4.metric("Volatilità", res['metrics']['vol_regime'], f"HV Ratio: {res['metrics']['hv_ratio']:.2f}")
-                
-                st.markdown("---")
-                
-                # --- CARDS ---
-                # Usiamo HTML puro per il layout "maniacale" richiesto
+    try:
+        with st.spinner("Generazione Dashboard..."):
+            df, data_sent, data_news = fetch_data(TICKER)
+            
+            if df is None or len(df) < 100:
+                st.error("Dati insufficienti o ticker non valido.")
+                return
+            
+            # Calcoli
+            sym = TICKER.split('.')[0]
+            sent_score, sent_label = process_sentiment(data_sent, sym)
+            res = calculate_metrics(df, sent_score, sent_label, data_news)
+            
+            # 1. HEADER
+            suff = TICKER.split('.')[1] if '.' in TICKER else 'US'
+            info = EXCHANGE_MAP.get(suff, {'type': 'Equity', 'currency': 'USD'})
+            
+            st.markdown(f"""
+            <div class="main-header">
+                <h1>{TICKER} - {info['type']}</h1>
+                <div class="header-meta">
+                    <span class="header-badge">📅 {df.index[-1].strftime('%Y-%m-%d')}</span>
+                    <span class="header-badge">💰 {res['price']:.4f} {info['currency']}</span>
+                    <span class="header-badge" style="background: {'rgba(38,166,154,0.3)' if res['change']>=0 else 'rgba(239,83,80,0.3)'}">
+                        {res['change']:+.2f}% (1D)
+                    </span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # 2. SCORE CARDS
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.markdown('<div class="metric-card"><div class="card-title">Composite Score</div>', unsafe_allow_html=True)
+                st.plotly_chart(make_gauge(res['scores']['final'], "", 
+                    [{'range': [0, 35], 'color': '#dc3545'}, {'range': [65, 100], 'color': '#28a745'}]), width="stretch")
+                st.markdown(f'<div style="text-align:center; margin-bottom:10px;"><span class="signal-badge" style="background:{res["signal"]["color"]}">{res["signal"]["label"]}</span></div></div>', unsafe_allow_html=True)
+            
+            with c2:
+                st.markdown('<div class="metric-card"><div class="card-title">Sentiment Score</div>', unsafe_allow_html=True)
+                st.plotly_chart(make_gauge(res['scores']['sent'], "", 
+                    [{'range': [0, 35], 'color': '#dc3545'}, {'range': [35, 65], 'color': '#ffc107'}, {'range': [65, 100], 'color': '#28a745'}]), width="stretch")
+                st.markdown(f'<div class="card-sub" style="text-align:center; margin-bottom:10px;">{sent_label}</div></div>', unsafe_allow_html=True)
+            
+            with c3:
                 st.markdown(f"""
-                <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-                    <div class="metric-card" style="flex: 1;">
-                        <div class="metric-label">Composite Score</div>
-                        <div class="metric-value">{res['scores']['final']:.1f}</div>
-                    </div>
-                    <div class="metric-card" style="flex: 1;">
-                        <div class="metric-label">Sentiment Score</div>
-                        <div class="metric-value">{res['scores']['sent']:.1f}</div>
-                    </div>
-                    <div class="metric-card" style="flex: 1;">
-                        <div class="metric-label">Technical Bias</div>
-                        <div class="metric-value">{res['scores']['tech']:.1f}</div>
-                    </div>
-                    <div class="metric-card" style="flex: 1;">
-                        <div class="metric-label">Momentum</div>
-                        <div class="metric-value" style="font-size: 1.4rem;">{res['metrics']['mom_align']}</div>
-                    </div>
+                <div class="metric-card">
+                    <div class="card-title">Technical Bias</div>
+                    <div class="card-value">{res['scores']['tech']:.0f}/100</div>
+                    <div class="card-sub">EMA: {'ABOVE' if res['ema_dist']>0 else 'BELOW'} | RSI: {res['rsi']:.0f}</div>
+                    <div class="card-sub" style="margin-top:5px;">Mom: {res['mom_align']}</div>
                 </div>
                 """, unsafe_allow_html=True)
                 
-                st.markdown("### 52 Week Range Position")
-                # Safety check: clampiamo il valore per evitare crash st.progress
-                st.progress(res['metrics']['pos_range_clamped'])
-                r1, r2, r3 = st.columns([1,8,1])
-                r1.caption("Low")
-                r2.caption(f"Position: {res['metrics']['pos_range']:.1f}%")
-                r3.caption("High")
+            with c4:
+                color_reg = "#28a745" if res['vol_regime']=="Low" else "#dc3545" if res['vol_regime']=="Extreme" else "#1a73e8"
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="card-title">Volatility Regime</div>
+                    <div style="margin:20px 0;"><span class="signal-badge" style="background:{color_reg}">{res['vol_regime'].upper()}</span></div>
+                    <div class="card-sub">ATR%: {res['atr_pct']:.2f}%</div>
+                    <div class="card-sub">HV20/60: {res['hv20']/res['hv60']:.2f}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # 3. RANGE BAR 52W
+            st.markdown(f"""
+            <div class="range-container">
+                <div class="card-title">52 Week Range Position</div>
+                <div style="display:flex; justify-content:space-between; font-size:0.85rem; color:#666;">
+                    <span>Low: {res['low52']:.2f}</span>
+                    <span>Current: {res['price']:.2f}</span>
+                    <span>High: {res['high52']:.2f}</span>
+                </div>
+                <div class="range-bar-bg">
+                    <div class="range-marker" style="left: {res['pos_range']}%;"></div>
+                </div>
+                <div class="range-stats">
+                    <div><strong>{res['pos_range']:.1f}%</strong><br>Position</div>
+                    <div style="color:{'#dc3545' if res['dd']<-10 else '#333'}"><strong>{res['dd']:.2f}%</strong><br>Drawdown</div>
+                    <div><strong>{res['max_dd']:.2f}%</strong><br>Max DD 1Y</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # 4. CHARTS SECTION
+            # Row 1: Price
+            st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+            st.plotly_chart(make_price_chart(df), width="stretch")
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Row 2: RSI & Momentum
+            col_ch1, col_ch2 = st.columns(2)
+            with col_ch1:
+                st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+                st.plotly_chart(make_rsi_chart(df), width="stretch")
+                st.markdown('</div>', unsafe_allow_html=True)
+            with col_ch2:
+                st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+                st.plotly_chart(make_mom_chart(res['roc']), width="stretch")
+                st.markdown('</div>', unsafe_allow_html=True)
                 
-                st.markdown(f"<div class='narrative-box'>📝 {res['narrative']}</div>", unsafe_allow_html=True)
+            # Row 3: Volatility (Mancante prima)
+            st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+            st.plotly_chart(make_vol_chart(df), width="stretch")
+            st.markdown(f'<div style="text-align:center; font-size:0.9rem; color:#666;">HV20: {res["hv20"]*100:.1f}% | HV60: {res["hv60"]*100:.1f}%</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # 5. NARRATIVE & FACTORS
+            narrative = f"L'analisi di {TICKER} indica un bias **{res['signal']['label']}** (Score: {res['scores']['final']:.1f}). "
+            narrative += f"Il prezzo si trova al {res['pos_range']:.1f}% del range annuale. "
+            if res['ema_dist'] > 0: narrative += "Il trend di fondo è positivo (sopra EMA 125). "
+            narrative += f"Volatilità {res['vol_regime']}."
+            
+            st.markdown(f'<div class="narrative-box">{narrative}</div>', unsafe_allow_html=True)
+            
+            f1, f2, f3 = st.columns(3)
+            with f1:
+                st.markdown('<h4 class="bullish">✅ Bullish Factors</h4>', unsafe_allow_html=True)
+                for f in [x for x in res['factors']['bullish'] if x]: st.markdown(f'<div class="factor-item">{f}</div>', unsafe_allow_html=True)
+            with f2:
+                st.markdown('<h4 class="bearish">⚠️ Bearish Factors</h4>', unsafe_allow_html=True)
+                for f in [x for x in res['factors']['bearish'] if x]: st.markdown(f'<div class="factor-item">{f}</div>', unsafe_allow_html=True)
+            with f3:
+                st.markdown('<h4 class="neutral">➖ Neutral Factors</h4>', unsafe_allow_html=True)
+                for f in [x for x in res['factors']['neutral'] if x]: st.markdown(f'<div class="factor-item">{f}</div>', unsafe_allow_html=True)
+            
+            st.markdown("---")
+            
+            # 6. NEWS SECTION
+            if data_news:
+                st.subheader("📰 Recent News")
+                for n in data_news[:5]:
+                    with st.expander(f"{n['date'][:10]} | {n['title']}"):
+                        st.write(n.get('content', 'No content'))
+                        st.markdown(f"[Link]({n['link']})")
+            
+            st.markdown("---")
+            
+            # 7. DETAILED METRICS TABLE (HTML REPLICATION)
+            st.subheader("📋 Detailed Metrics")
+            
+            # Costruzione tabella HTML
+            html_table = f"""
+            <table class="metrics-table">
+                <tr><td colspan="3" class="section-header">PRICE DATA</td></tr>
+                <tr><td>Current Price</td><td>{res['price']:.4f} {info['currency']}</td><td>-</td></tr>
+                <tr><td>Change (1D)</td><td>{res['change']:+.2f}%</td><td>{res['change_abs']:+.4f}</td></tr>
                 
-                # --- CHARTS TABS ---
-                t1, t2 = st.tabs(["📉 Price & Indicators", "📊 Analysis Details"])
+                <tr><td colspan="3" class="section-header">TECHNICAL INDICATORS</td></tr>
+                <tr><td>EMA 125</td><td>{res['ema']:.4f}</td><td>Dist: {res['ema_dist']:+.2f}%</td></tr>
+                <tr><td>RSI 14</td><td>{res['rsi']:.1f}</td><td>{'Overbought' if res['rsi']>70 else 'Oversold' if res['rsi']<30 else 'Neutral'}</td></tr>
                 
-                with t1:
-                    # FIX DEPRECATION: uso width="stretch" invece di use_container_width=True
-                    fig_p = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
-                    fig_p.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
-                    fig_p.add_trace(go.Scatter(x=df.index, y=df['ema'], line=dict(color='#ff9800'), name='EMA 125'), row=1, col=1)
-                    fig_p.add_trace(go.Bar(x=df.index, y=df['volume'], marker_color='rgba(26, 115, 232, 0.3)', name='Vol'), row=2, col=1)
-                    fig_p.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
-                    st.plotly_chart(fig_p, width="stretch")
-                    
-                    cc1, cc2 = st.columns(2)
-                    with cc1:
-                        fig_rsi = go.Figure()
-                        fig_rsi.add_trace(go.Scatter(x=df.index[-120:], y=df['rsi'].iloc[-120:], line=dict(color='#7b1fa2')))
-                        fig_rsi.add_hline(y=70, line_dash='dot', line_color='red')
-                        fig_rsi.add_hline(y=30, line_dash='dot', line_color='green')
-                        fig_rsi.update_layout(height=250, title="RSI 14", margin=dict(l=10, r=10, t=30, b=10))
-                        st.plotly_chart(fig_rsi, width="stretch")
-                    with cc2:
-                        fig_roc = go.Figure(go.Bar(x=['10d', '21d', '63d'], y=res['metrics']['roc'], marker_color=['#2e7d32' if x>0 else '#c62828' for x in res['metrics']['roc']]))
-                        fig_roc.update_layout(height=250, title="Momentum ROC", margin=dict(l=10, r=10, t=30, b=10))
-                        st.plotly_chart(fig_roc, width="stretch")
+                <tr><td colspan="3" class="section-header">MOMENTUM</td></tr>
+                <tr><td>ROC 10d</td><td>{res['roc'][10]:+.2f}%</td><td>Short Term</td></tr>
+                <tr><td>ROC 63d</td><td>{res['roc'][63]:+.2f}%</td><td>Long Term</td></tr>
+                <tr><td>Alignment</td><td>{res['mom_align']}</td><td>-</td></tr>
+                
+                <tr><td colspan="3" class="section-header">VOLATILITY</td></tr>
+                <tr><td>ATR 14</td><td>{res['atr']:.4f}</td><td>{res['atr_pct']:.2f}% of price</td></tr>
+                <tr><td>HV 20</td><td>{res['hv20']*100:.1f}%</td><td>Annualized</td></tr>
+                <tr><td>HV 60</td><td>{res['hv60']*100:.1f}%</td><td>Annualized</td></tr>
+                <tr><td>Regime</td><td>{res['vol_regime']}</td><td>Ratio: {res['hv20']/res['hv60']:.2f}</td></tr>
+                
+                <tr><td colspan="3" class="section-header">PRICE STRUCTURE</td></tr>
+                <tr><td>52W High</td><td>{res['high52']:.2f}</td><td>-</td></tr>
+                <tr><td>52W Low</td><td>{res['low52']:.2f}</td><td>-</td></tr>
+                <tr><td>Pos in Range</td><td>{res['pos_range']:.1f}%</td><td>-</td></tr>
+                <tr><td>Drawdown</td><td>{res['dd']:.2f}%</td><td>Max 1Y: {res['max_dd']:.2f}%</td></tr>
+                
+                <tr><td colspan="3" class="section-header">COMPOSITE SCORE</td></tr>
+                <tr><td>Technical</td><td>{res['scores']['tech']:.1f}/100</td><td>Weight: {CONFIG['W_TECHNICAL']}</td></tr>
+                <tr><td>Sentiment</td><td>{res['scores']['sent']:.1f}/100</td><td>Weight: {CONFIG['W_SENTIMENT']}</td></tr>
+                <tr><td><strong>Final Score</strong></td><td><strong>{res['scores']['final']:.1f}/100</strong></td><td>Signal: {res['signal']['label']}</td></tr>
+            </table>
+            """
+            st.markdown(html_table, unsafe_allow_html=True)
+            
+            # JSON Export
+            json_export = {
+                'ticker': TICKER,
+                'timestamp': datetime.now().isoformat(),
+                'metrics': res
+            }
+            st.sidebar.download_button("📥 Download JSON", json.dumps(json_export, indent=2, default=str), f"{TICKER}_analysis.json", "application/json")
 
-                with t2:
-                    col_f1, col_f2, col_f3 = st.columns(3)
-                    with col_f1: 
-                        st.markdown("#### ✅ Bullish")
-                        for f in res['factors']['bullish']: st.markdown(f"<div class='factor-box bullish'>{f}</div>", unsafe_allow_html=True)
-                    with col_f2:
-                        st.markdown("#### ⚠️ Bearish")
-                        for f in res['factors']['bearish']: st.markdown(f"<div class='factor-box bearish'>{f}</div>", unsafe_allow_html=True)
-                    with col_f3:
-                        st.markdown("#### ➖ Neutral")
-                        for f in res['factors']['neutral']: st.markdown(f"<div class='factor-box neutral'>{f}</div>", unsafe_allow_html=True)
-                    
-                    st.markdown("---")
-                    st.subheader("📋 Detailed Metrics Table")
-                    dm1, dm2 = st.columns(2)
-                    with dm1:
-                        st.write(f"**EMA Distance**: {res['metrics']['ema_dist']:.2f}%")
-                        st.write(f"**RSI Level**: {res['metrics']['rsi']:.1f}")
-                        st.write(f"**Drawdown**: {res['metrics']['dd']:.2f}%")
-                    with dm2:
-                        st.write(f"**News Spike**: {'YES' if res['news_metrics']['spike'] else 'No'}")
-                        st.write(f"**News Velocity**: {res['news_metrics']['velocity']:.2f}x")
-                        st.write(f"**HV Ratio**: {res['metrics']['hv_ratio']:.2f}")
-
-                # JSON Export
-                json_data = {
-                    'meta': {'ticker': TICKER, 'ts': datetime.now().isoformat()},
-                    'data': res
-                }
-                st.sidebar.download_button("📥 Download JSON LLM", json.dumps(json_data, indent=2), f"{TICKER}_analysis.json", "application/json")
-                
-                # News
-                if news:
-                    st.subheader("📰 Recent News")
-                    for n in news[:5]:
-                        try:
-                            # Gestione sicura del sentiment
-                            score = 0
-                            if n.get('sentiment') and isinstance(n['sentiment'], dict):
-                                score = float(n['sentiment'].get('normalized', 0))
-                            color = "🟢" if score > 0.5 else "🔴" if score < -0.5 else "⚪"
-                        except: color = "⚪"
-                        
-                        with st.expander(f"{color} {n.get('date','N/A')[:10]} | {n.get('title','No Title')}"):
-                            st.write(n.get('content', 'No content.'))
-                            st.markdown(f"[Leggi articolo]({n.get('link','#')})")
-
-        except Exception as e:
-            st.error(f"Errore critico nell'applicazione: {str(e)}")
-            with st.expander("Dettagli errore"):
-                st.code(traceback.format_exc())
+    except Exception as e:
+        st.error(f"Errore critico: {str(e)}")
+        st.code(traceback.format_exc())
 
 if __name__ == "__main__":
     main()
