@@ -11,7 +11,7 @@ from scipy import stats
 import time
 
 # ============================================================================
-# 1. CONFIGURAZIONE PAGINA E STILE
+# 1. CONFIGURAZIONE E STILI
 # ============================================================================
 st.set_page_config(
     page_title="Kriterion Quant Dashboard",
@@ -20,63 +20,59 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS
+# CSS per replicare lo stile della dashboard HTML
 st.markdown("""
 <style>
-    .stMetric {
-        background-color: #f8f9fa;
-        padding: 10px;
+    .metric-card {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
         border-radius: 8px;
-        border: 1px solid #dee2e6;
+        padding: 15px;
+        text-align: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
-    div[data-testid="stExpander"] div[role="button"] p {
-        font-size: 1rem;
-        font-weight: 600;
+    .metric-value { font-size: 1.8rem; font-weight: 700; color: #333; }
+    .metric-label { font-size: 0.9rem; color: #666; text-transform: uppercase; }
+    .metric-sub { font-size: 0.8rem; color: #888; margin-top: 5px; }
+    
+    .factor-box { padding: 10px; border-radius: 5px; margin-bottom: 5px; font-size: 0.9rem; }
+    .bullish { background-color: #e8f5e9; color: #2e7d32; border-left: 4px solid #2e7d32; }
+    .bearish { background-color: #ffebee; color: #c62828; border-left: 4px solid #c62828; }
+    .neutral { background-color: #f5f5f5; color: #616161; border-left: 4px solid #616161; }
+    
+    .narrative-box {
+        background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+        border-left: 5px solid #1976d2;
+        padding: 20px;
+        border-radius: 8px;
+        color: #0d47a1;
+        font-size: 1.05rem;
+        margin-bottom: 20px;
     }
-    h1, h2, h3 {
-        color: #1a73e8;
-    }
-    .badge-guide {
-        background-color: #e8f0fe;
-        color: #174ea6;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-family: monospace;
-        font-size: 0.9em;
-    }
+    
+    .stProgress > div > div > div > div { background-color: #1a73e8; }
+    h1, h2, h3 { color: #1a73e8; }
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# 2. SETUP API E PARAMETRI
+# 2. SETUP API
 # ============================================================================
-
-# Recupero API Key
-if "EODHD_API_KEY" not in st.secrets:
-    st.error("❌ ERRORE CRITICO: EODHD_API_KEY non trovata nei secrets dell'app.")
+try:
+    EODHD_API_KEY = st.secrets["EODHD_API_KEY"]
+except:
+    st.error("❌ EODHD_API_KEY mancante nei secrets.")
     st.stop()
 
-EODHD_API_KEY = st.secrets["EODHD_API_KEY"]
 EODHD_BASE_URL = "https://eodhd.com/api"
 
 CONFIG = {
-    'EMA_PERIOD': 125,
-    'RSI_PERIOD': 14,
-    'ATR_PERIOD': 14,
-    'HV_SHORT': 20,
-    'HV_LONG': 60,
-    'ROC_PERIODS': [10, 21, 63],
-    'VOLUME_LOOKBACK': 252,
-    'NEWS_LIMIT': 50,
-    'SENTIMENT_DAYS': 30,
-    'NEWS_SPIKE_THRESHOLD': 2.0,
-    'W_TECHNICAL': 0.55,
-    'W_SENTIMENT': 0.45,
-    'W_EMA': 0.35,
-    'W_RSI': 0.35,
-    'W_MOMENTUM': 0.30,
-    'DATA_BUFFER_DAYS': 150,
-    'MIN_TRADING_DAYS': 252
+    'EMA_PERIOD': 125, 'RSI_PERIOD': 14, 'ATR_PERIOD': 14,
+    'HV_SHORT': 20, 'HV_LONG': 60, 'ROC_PERIODS': [10, 21, 63],
+    'VOLUME_LOOKBACK': 252, 'NEWS_LIMIT': 50, 'SENTIMENT_DAYS': 30,
+    'NEWS_SPIKE_THRESHOLD': 2.0, 'W_TECHNICAL': 0.55, 'W_SENTIMENT': 0.45,
+    'W_EMA': 0.35, 'W_RSI': 0.35, 'W_MOMENTUM': 0.30,
+    'DATA_BUFFER_DAYS': 150, 'MIN_TRADING_DAYS': 252
 }
 
 EXCHANGE_MAP = {
@@ -91,424 +87,348 @@ EXCHANGE_MAP = {
 }
 
 # ============================================================================
-# 3. FUNZIONI DI CALCOLO E FETCHING
+# 3. FUNZIONI DATA FETCHING & PROCESSING
 # ============================================================================
 
-def validate_ticker(ticker: str) -> Tuple[bool, str, Dict]:
-    if not ticker: return False, "Ticker non inserito", {}
-    if '.' not in ticker: return False, "Formato errato. Usa: SYMBOL.EXCHANGE (es. AAPL.US)", {}
-    parts = ticker.rsplit('.', 1)
-    if len(parts) != 2: return False, "Formato non valido", {}
-    symbol, exchange = parts
-    if exchange not in EXCHANGE_MAP:
-        return False, f"Exchange '{exchange}' non supportato. Usa: {', '.join(EXCHANGE_MAP.keys())}", {}
-    asset_info = {'symbol': symbol, 'exchange': exchange, 'full_ticker': ticker, **EXCHANGE_MAP[exchange]}
-    return True, "", asset_info
-
-def api_request_with_retry(url: str, params: Dict, max_retries: int = 3) -> Optional[Dict]:
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(url, params=params, timeout=30)
-            if response.status_code == 200: return response.json()
-            elif response.status_code == 404: return None
-            elif response.status_code == 429:
-                time.sleep((2 ** attempt) * 2)
-                continue
-        except requests.exceptions.RequestException:
-            time.sleep(2)
+def api_request(url, params):
+    try:
+        r = requests.get(url, params=params, timeout=15)
+        if r.status_code == 200: return r.json()
+    except: pass
     return None
 
 @st.cache_data(ttl=3600)
-def fetch_ohlcv_data(ticker: str, days: int) -> Optional[pd.DataFrame]:
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days)
+def fetch_ohlcv(ticker, days):
+    end = datetime.now()
+    start = end - timedelta(days=days)
     url = f"{EODHD_BASE_URL}/eod/{ticker}"
-    params = {'api_token': EODHD_API_KEY, 'from': start_date.strftime('%Y-%m-%d'), 'to': end_date.strftime('%Y-%m-%d'), 'fmt': 'json', 'order': 'a'}
-    data = api_request_with_retry(url, params)
+    data = api_request(url, {'api_token': EODHD_API_KEY, 'from': start.strftime('%Y-%m-%d'), 'to': end.strftime('%Y-%m-%d'), 'fmt': 'json'})
     if not data: return None
     df = pd.DataFrame(data)
     df['date'] = pd.to_datetime(df['date'])
-    df = df.set_index('date')
+    df = df.set_index('date').sort_index()
     df.columns = [c.lower() for c in df.columns]
-    df = df[df['volume'] > 0]
-    return df
+    return df[df['volume'] > 0]
 
 @st.cache_data(ttl=3600)
-def fetch_sentiment_data(ticker: str, days: int) -> Optional[Dict]:
+def fetch_sentiment(ticker):
     symbol = ticker.split('.')[0]
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days)
+    end = datetime.now()
+    start = end - timedelta(days=30)
     url = f"{EODHD_BASE_URL}/sentiments"
-    params = {'api_token': EODHD_API_KEY, 's': symbol, 'from': start_date.strftime('%Y-%m-%d'), 'to': end_date.strftime('%Y-%m-%d')}
-    data = api_request_with_retry(url, params)
+    data = api_request(url, {'api_token': EODHD_API_KEY, 's': symbol, 'from': start.strftime('%Y-%m-%d'), 'to': end.strftime('%Y-%m-%d')})
+    
     if not data: return None
+    
+    # Gestione robusta della risposta (Dict o List)
+    target_data = None
     if isinstance(data, dict):
-        if symbol.lower() in [k.lower() for k in data.keys()]:
-            return data[next(k for k in data.keys() if k.lower() == symbol.lower())]
-        elif len(data) > 0:
-            return data[list(data.keys())[0]]
-    return None
+        # Cerca la chiave del ticker
+        keys = [k for k in data.keys() if k.lower() == symbol.lower()]
+        if keys: target_data = data[keys[0]]
+        elif len(data) > 0: target_data = data[list(data.keys())[0]]
+    
+    # Se è una lista (historical data), calcoliamo la media
+    if isinstance(target_data, list):
+        valid_scores = [float(x.get('normalized', 0)) for x in target_data if x.get('normalized') is not None]
+        if valid_scores:
+            avg_score = sum(valid_scores) / len(valid_scores)
+            return {'normalized': avg_score, 'count': len(valid_scores)}
+        return None
+    
+    return target_data
 
 @st.cache_data(ttl=3600)
-def fetch_news_data(ticker: str, limit: int) -> Optional[List[Dict]]:
-    symbol = ticker.split('.')[0]
+def fetch_news(ticker):
     url = f"{EODHD_BASE_URL}/news"
-    params = {'api_token': EODHD_API_KEY, 's': ticker, 'limit': limit, 'offset': 0}
-    data = api_request_with_retry(url, params)
-    if (not data) and '.' in ticker:
-        params['s'] = symbol
-        data = api_request_with_retry(url, params)
-    return data if data else None
-
-# --- Indicatori Tecnici ---
-def calculate_ema(series: pd.Series, period: int) -> pd.Series:
-    return series.ewm(span=period, adjust=False).mean()
-
-def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = (-delta).where(delta < 0, 0.0)
-    avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-def calculate_volume_percentile(volume_series: pd.Series, lookback: int = 252) -> Tuple[float, pd.Series]:
-    available_days = min(lookback, len(volume_series))
-    percentiles = pd.Series(index=volume_series.index, dtype=float)
-    vals = volume_series.values
-    for i in range(available_days, len(vals) + 1):
-        window = vals[max(0, i-available_days):i]
-        percentiles.iloc[i-1] = stats.percentileofscore(window, vals[i-1])
-    return percentiles.iloc[-1] if not pd.isna(percentiles.iloc[-1]) else 50.0, percentiles
-
-def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    high, low, close = df['high'], df['low'], df['close']
-    prev_close = close.shift(1)
-    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
-    return tr.ewm(span=period, adjust=False).mean()
-
-def calculate_historical_volatility(close: pd.Series, period: int) -> pd.Series:
-    return np.log(close / close.shift(1)).rolling(window=period).std() * np.sqrt(252)
-
-def calculate_roc(series: pd.Series, period: int) -> pd.Series:
-    return ((series - series.shift(period)) / series.shift(period)) * 100
-
-def calculate_drawdown(close: pd.Series) -> pd.DataFrame:
-    running_max = close.expanding().max()
-    dd = close - running_max
-    dd_pct = (dd / running_max) * 100
-    return pd.DataFrame({'running_max': running_max, 'drawdown': dd, 'drawdown_pct': dd_pct})
-
-# --- Helper Sentiment ---
-def extract_sentiment_value(raw_value) -> float:
-    """Estrae in modo sicuro un valore float dal sentiment, gestendo dict o float puri."""
-    try:
-        if isinstance(raw_value, dict):
-            # Cerca chiavi comuni usate da EODHD
-            return float(raw_value.get('normalized', raw_value.get('polarity', raw_value.get('score', 0))))
-        elif raw_value is not None:
-            return float(raw_value)
-    except (ValueError, TypeError):
-        pass
-    return 0.0
-
-def normalize_sentiment(score) -> float:
-    return round(((max(-1, min(1, score)) - (-1)) / 2) * 100, 1)
-
-# --- Helper Classificazione ---
-def classify_volatility_regime(atr_p: float, hv_p: float) -> str:
-    if atr_p > 90 or hv_p > 90: return "extreme"
-    elif atr_p > 70 or hv_p > 70: return "high"
-    elif atr_p < 30 and hv_p < 30: return "low"
-    else: return "normal"
-
-def classify_momentum(roc10, roc21, roc63):
-    if roc10 > 0 and roc21 > 0 and roc63 > 0: return "aligned_bullish"
-    if roc10 < 0 and roc21 < 0 and roc63 < 0: return "aligned_bearish"
-    return "transitional"
-
-def detect_rsi_divergence(price, rsi, lookback=14):
-    if len(price) < lookback*2: return "none"
-    price_recent = price.iloc[-lookback:]
-    rsi_recent = rsi.iloc[-lookback:]
-    price_prev = price.iloc[-lookback*2:-lookback]
-    rsi_prev = rsi.iloc[-lookback*2:-lookback]
-    
-    if price_recent.min() < price_prev.min() and rsi.loc[price_recent.idxmin()] > rsi.loc[price_prev.idxmin()]:
-        return "bullish"
-    if price_recent.max() > price_prev.max() and rsi.loc[price_recent.idxmax()] < rsi.loc[price_prev.idxmax()]:
-        return "bearish"
-    return "none"
+    return api_request(url, {'api_token': EODHD_API_KEY, 's': ticker, 'limit': 50})
 
 # ============================================================================
-# 4. APP PRINCIPALE
+# 4. CALCOLI TECNICI (REPLICA NOTEBOOK)
+# ============================================================================
+
+def calculate_technical_indicators(df):
+    # EMA
+    df['ema'] = df['close'].ewm(span=CONFIG['EMA_PERIOD'], adjust=False).mean()
+    
+    # RSI
+    delta = df['close'].diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.ewm(alpha=1/CONFIG['RSI_PERIOD'], min_periods=CONFIG['RSI_PERIOD'], adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/CONFIG['RSI_PERIOD'], min_periods=CONFIG['RSI_PERIOD'], adjust=False).mean()
+    rs = avg_gain / avg_loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+    
+    # ATR
+    h, l, c = df['high'], df['low'], df['close']
+    tr = pd.concat([h-l, (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
+    df['atr'] = tr.ewm(span=CONFIG['ATR_PERIOD'], adjust=False).mean()
+    
+    # HV
+    log_ret = np.log(c / c.shift(1))
+    df['hv20'] = log_ret.rolling(20).std() * np.sqrt(252)
+    df['hv60'] = log_ret.rolling(60).std() * np.sqrt(252)
+    
+    # ROC
+    for p in CONFIG['ROC_PERIODS']:
+        df[f'roc_{p}'] = ((c - c.shift(p)) / c.shift(p)) * 100
+        
+    return df
+
+def get_volume_percentile(vol_series):
+    lookback = min(len(vol_series), CONFIG['VOLUME_LOOKBACK'])
+    window = vol_series.iloc[-lookback:]
+    return stats.percentileofscore(window, vol_series.iloc[-1])
+
+# ============================================================================
+# 5. LOGICA SCORING & NARRATIVA
+# ============================================================================
+
+def analyze_asset(df, sent_data, news_list, ticker):
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    # --- 1. CORE METRICS ---
+    ema_dist_pct = ((last['close'] - last['ema']) / last['ema']) * 100
+    ema_pos = "ABOVE" if last['close'] > last['ema'] else "BELOW"
+    
+    rsi_val = last['rsi']
+    rsi_zone = "Oversold" if rsi_val < 30 else "Overbought" if rsi_val > 70 else "Neutral"
+    
+    vol_pct = get_volume_percentile(df['volume'])
+    
+    hv_ratio = last['hv20'] / last['hv60'] if last['hv60'] else 1.0
+    
+    # Regime Volatilità (basato su percentili ATR e HV)
+    atr_series = df['atr'].dropna().iloc[-252:]
+    atr_p = stats.percentileofscore(atr_series, last['atr'])
+    vol_regime = "EXTREME" if atr_p > 90 else "HIGH" if atr_p > 70 else "LOW" if atr_p < 30 else "NORMAL"
+    
+    # Momentum Alignment
+    roc_vals = [last[f'roc_{p}'] for p in CONFIG['ROC_PERIODS']]
+    if all(x > 0 for x in roc_vals): mom_align = "Bullish"
+    elif all(x < 0 for x in roc_vals): mom_align = "Bearish"
+    else: mom_align = "Transitional"
+    
+    # Price Structure
+    high_52 = df['high'].iloc[-252:].max()
+    low_52 = df['low'].iloc[-252:].min()
+    pos_range = ((last['close'] - low_52) / (high_52 - low_52)) * 100
+    
+    dd_curr = ((last['close'] / df['close'].expanding().max().iloc[-1]) - 1) * 100
+    
+    # --- 2. SENTIMENT ---
+    sent_score_norm = 50.0
+    if sent_data:
+        val = sent_data.get('normalized', sent_data.get('score', 0))
+        sent_score_norm = ((max(-1, min(1, float(val))) + 1) / 2) * 100
+        
+    # News Spike
+    news_spike = False
+    velocity = 1.0
+    if news_list:
+        now = datetime.now()
+        c7 = sum(1 for n in news_list if (now - pd.to_datetime(n['date'][:10])).days <= 7)
+        c30 = sum(1 for n in news_list if (now - pd.to_datetime(n['date'][:10])).days <= 30)
+        avg = c30 / 30 if c30 else 0
+        velocity = c7 / (avg * 7) if avg else 1.0
+        news_spike = velocity > CONFIG['NEWS_SPIKE_THRESHOLD']
+
+    # --- 3. SCORING ---
+    # Technical
+    s_ema = 50 + (min(35, ema_dist_pct * 3) if ema_dist_pct > 0 else max(-35, ema_dist_pct * 3))
+    s_rsi = 50 + (rsi_val - 50)
+    s_mom = 75 if mom_align == "Bullish" else 25 if mom_align == "Bearish" else 50
+    
+    tech_score = (max(0,min(100,s_ema)) * CONFIG['W_EMA']) + \
+                 (max(0,min(100,s_rsi)) * CONFIG['W_RSI']) + \
+                 (max(0,min(100,s_mom)) * CONFIG['W_MOMENTUM'])
+                 
+    # Sentiment Adjusted
+    final_sent = sent_score_norm
+    if news_spike:
+        final_sent += 10 if sent_score_norm > 60 else -10 if sent_score_norm < 40 else 0
+        
+    # Composite
+    raw_comp = (tech_score * CONFIG['W_TECHNICAL']) + (final_sent * CONFIG['W_SENTIMENT'])
+    
+    # Adjustments
+    adj_vol = 0.8 if vol_regime == "EXTREME" else 1.0
+    adj_vlm = 1.1 if vol_pct > 80 else 0.9 if vol_pct < 20 else 1.0
+    
+    final_score = max(0, min(100, raw_comp * adj_vol * adj_vlm))
+    
+    # Signal
+    if final_score >= 80: signal = "STRONG BUY"
+    elif final_score >= 65: signal = "BUY"
+    elif final_score >= 45: signal = "NEUTRAL"
+    elif final_score >= 30: signal = "SELL"
+    else: signal = "STRONG SELL"
+    
+    confidence = 0.5 + (0.1 if mom_align != "Transitional" else 0) + (0.1 if vol_pct > 60 else 0)
+    
+    # --- 4. FACTORS & NARRATIVE ---
+    bullish = []
+    bearish = []
+    neutral = []
+    
+    if ema_pos == "ABOVE": bullish.append(f"Prezzo sopra EMA125 (+{ema_dist_pct:.1f}%)")
+    else: bearish.append(f"Prezzo sotto EMA125 ({ema_dist_pct:.1f}%)")
+    
+    if rsi_val < 30: bullish.append(f"RSI Oversold ({rsi_val:.1f})")
+    elif rsi_val > 70: bearish.append(f"RSI Overbought ({rsi_val:.1f})")
+    
+    if vol_pct > 80: bullish.append(f"Volume alto (P{vol_pct:.0f})")
+    elif vol_pct < 20: bearish.append(f"Volume basso (P{vol_pct:.0f})")
+    
+    if mom_align == "Bullish": bullish.append("Momentum allineato rialzista")
+    elif mom_align == "Bearish": bearish.append("Momentum allineato ribassista")
+    else: neutral.append("Momentum in transizione")
+    
+    narrative = f"L'analisi di {ticker} indica un bias **{signal}** (Score: {final_score:.1f}) con confidence del {confidence:.0%}. "
+    narrative += f"Il prezzo si trova al {pos_range:.1f}% del range annuale. "
+    narrative += f"Il regime di volatilità è {vol_regime}. "
+    
+    return {
+        'scores': {'final': final_score, 'tech': tech_score, 'sent': final_sent},
+        'signal': signal, 'confidence': confidence,
+        'metrics': {
+            'close': last['close'], 'change': ((last['close']/prev['close'])-1)*100,
+            'ema_pos': ema_pos, 'ema_dist': ema_dist_pct,
+            'rsi': rsi_val, 'rsi_zone': rsi_zone,
+            'vol_pct': vol_pct, 'vol_regime': vol_regime,
+            'pos_range': pos_range, 'dd': dd_curr,
+            'hv_ratio': hv_ratio, 'mom_align': mom_align,
+            'roc': roc_vals
+        },
+        'factors': {'bullish': bullish, 'bearish': bearish, 'neutral': neutral},
+        'narrative': narrative,
+        'news_metrics': {'velocity': velocity, 'spike': news_spike}
+    }
+
+# ============================================================================
+# 6. LAYOUT APP
 # ============================================================================
 
 st.sidebar.title("Kriterion Quant")
 st.sidebar.caption("Financial Sentiment Dashboard v2.0")
 
-# --- LEGGENDA SIDEBAR AGGIUNTA ---
-with st.sidebar.expander("ℹ️ Guida Suffissi Ticker", expanded=False):
-    st.markdown("""
-    **Formato:** `SIMBOLO.EXCHANGE`
-    
-    * 🇺🇸 **US Stock:** `.US` (es. `AAPL.US`)
-    * 🇮🇹 **Milano:** `.MI` (es. `ENI.MI`, `UCG.MI`)
-    * 🇩🇪 **Francoforte:** `.F` (es. `SAP.F`)
-    * 🇫🇷 **Parigi:** `.PA` (es. `OR.PA`)
-    * 🇬🇧 **Londra:** `.L` (es. `RR.L`)
-    * ₿ **Crypto:** `.CC` (es. `BTC-USD.CC`)
-    * 📈 **Indici:** `.INDX` (es. `GSPC.INDX`)
-    """)
+with st.sidebar.expander("ℹ️ Guida Ticker"):
+    st.markdown("- **US:** AAPL.US\n- **EU:** ENI.MI, SAP.F\n- **Crypto:** BTC-USD.CC\n- **Index:** GSPC.INDX")
 
-st.sidebar.markdown("---")
-
-TICKER = st.sidebar.text_input("Inserisci Ticker:", value="AAPL.US").strip().upper()
+TICKER = st.sidebar.text_input("Ticker:", value="AAPL.US").upper()
 
 if TICKER:
-    is_valid, err, asset_info = validate_ticker(TICKER)
-    if not is_valid:
-        st.error(f"❌ {err}")
-    else:
-        with st.spinner(f"Acquisizione dati per {TICKER}..."):
-            # Fetch Dati
-            df_ohlcv = fetch_ohlcv_data(TICKER, CONFIG['MIN_TRADING_DAYS'] + CONFIG['DATA_BUFFER_DAYS'])
+    with st.spinner("Analisi in corso..."):
+        df = fetch_ohlcv(TICKER, CONFIG['MIN_TRADING_DAYS'] + 100)
+        if df is not None and len(df) > 50:
+            df = calculate_technical_indicators(df)
+            sent = fetch_sentiment(TICKER)
+            news = fetch_news(TICKER)
             
-            if df_ohlcv is None or len(df_ohlcv) < CONFIG['EMA_PERIOD']:
-                st.error("Dati insufficienti per l'analisi tecnica completa.")
-            else:
-                sent_data = fetch_sentiment_data(TICKER, CONFIG['SENTIMENT_DAYS'])
-                news_list = fetch_news_data(TICKER, CONFIG['NEWS_LIMIT'])
+            res = analyze_asset(df, sent, news, TICKER)
+            
+            # --- HEADER ---
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Asset", TICKER, "Equity")
+            c2.metric("Prezzo", f"{res['metrics']['close']:.2f}", f"{res['metrics']['change']:+.2f}%")
+            c3.metric("Signal", res['signal'], f"Conf: {res['confidence']:.0%}")
+            c4.metric("Volatilità", res['metrics']['vol_regime'], f"HV Ratio: {res['metrics']['hv_ratio']:.2f}")
+            
+            st.markdown("---")
+            
+            # --- CARDS ROW ---
+            c1, c2, c3, c4 = st.columns(4)
+            c1.markdown(f"<div class='metric-card'><div class='metric-label'>Composite Score</div><div class='metric-value'>{res['scores']['final']:.1f}</div></div>", unsafe_allow_html=True)
+            c2.markdown(f"<div class='metric-card'><div class='metric-label'>Sentiment Score</div><div class='metric-value'>{res['scores']['sent']:.1f}</div></div>", unsafe_allow_html=True)
+            c3.markdown(f"<div class='metric-card'><div class='metric-label'>Technical Bias</div><div class='metric-value'>{res['scores']['tech']:.1f}</div></div>", unsafe_allow_html=True)
+            c4.markdown(f"<div class='metric-card'><div class='metric-label'>Momentum</div><div class='metric-value' style='font-size:1.4rem'>{res['metrics']['mom_align']}</div></div>", unsafe_allow_html=True)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # --- RANGE BAR ---
+            st.markdown("##### 52 Week Range Position")
+            st.progress(int(res['metrics']['pos_range']))
+            r1, r2, r3 = st.columns([1,8,1])
+            r1.caption("Low")
+            r3.caption("High")
+            
+            # --- NARRATIVE ---
+            st.markdown(f"<div class='narrative-box'>📝 {res['narrative']}</div>", unsafe_allow_html=True)
+            
+            # --- CHARTS ---
+            t1, t2 = st.tabs(["Price & Indicators", "Analysis Details"])
+            
+            with t1:
+                # Price Chart
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
+                fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=df['ema'], line=dict(color='orange'), name='EMA 125'), row=1, col=1)
+                fig.add_trace(go.Bar(x=df.index, y=df['volume'], marker_color='rgba(0,0,255,0.3)', name='Vol'), row=2, col=1)
+                fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=20, r=20, t=20, b=20))
+                st.plotly_chart(fig, use_container_width=True)
                 
-                # --- CALCOLI CORE ---
-                current_price = df_ohlcv['close'].iloc[-1]
-                
-                # EMA
-                df_ohlcv['ema_125'] = calculate_ema(df_ohlcv['close'], CONFIG['EMA_PERIOD'])
-                curr_ema = df_ohlcv['ema_125'].iloc[-1]
-                ema_dist_pct = ((current_price - curr_ema) / curr_ema) * 100
-                
-                # RSI
-                df_ohlcv['rsi'] = calculate_rsi(df_ohlcv['close'], CONFIG['RSI_PERIOD'])
-                curr_rsi = df_ohlcv['rsi'].iloc[-1]
-                
-                # Volume
-                vol_pct, _ = calculate_volume_percentile(df_ohlcv['volume'], CONFIG['VOLUME_LOOKBACK'])
-                
-                # Volatility
-                df_ohlcv['atr'] = calculate_atr(df_ohlcv, CONFIG['ATR_PERIOD'])
-                df_ohlcv['hv20'] = calculate_historical_volatility(df_ohlcv['close'], CONFIG['HV_SHORT'])
-                df_ohlcv['hv60'] = calculate_historical_volatility(df_ohlcv['close'], CONFIG['HV_LONG'])
-                
-                curr_hv20 = df_ohlcv['hv20'].iloc[-1]
-                curr_hv60 = df_ohlcv['hv60'].iloc[-1]
-                hv_ratio = curr_hv20 / curr_hv60 if curr_hv60 else 1.0
-                
-                # Calcolo percentili per regime
-                atr_w = df_ohlcv['atr'].dropna().iloc[-252:]
-                hv_w = df_ohlcv['hv20'].dropna().iloc[-252:]
-                atr_p = stats.percentileofscore(atr_w.values, df_ohlcv['atr'].iloc[-1])
-                hv_p = stats.percentileofscore(hv_w.values, curr_hv20)
-                vol_regime = classify_volatility_regime(atr_p, hv_p)
-                
-                # Momentum
-                r10 = calculate_roc(df_ohlcv['close'], 10).iloc[-1]
-                r21 = calculate_roc(df_ohlcv['close'], 21).iloc[-1]
-                r63 = calculate_roc(df_ohlcv['close'], 63).iloc[-1]
-                mom_align = classify_momentum(r10, r21, r63)
-                
-                # Divergenze
-                rsi_div = detect_rsi_divergence(df_ohlcv['close'], df_ohlcv['rsi'])
-                
-                # Price Structure
-                df_an = df_ohlcv.iloc[-252:]
-                high_52 = df_an['high'].max()
-                low_52 = df_an['low'].min()
-                pos_range = ((current_price - low_52)/(high_52 - low_52))*100
-                dd_df = calculate_drawdown(df_ohlcv['close'])
-                curr_dd = dd_df['drawdown_pct'].iloc[-1]
-                
-                # Sentiment Processing (CORRETTO TYPE ERROR)
-                raw_sent_val = 0.0
-                sent_score = 50.0
-                if sent_data:
-                    val = sent_data.get('sentiment', sent_data.get('score', sent_data.get('normalized')))
-                    raw_sent_val = extract_sentiment_value(val)
-                    sent_score = normalize_sentiment(raw_sent_val)
-                
-                # News Velocity
-                news_spike = False
-                news_velocity = 1.0
-                if news_list:
-                    now = datetime.now()
-                    c7 = sum(1 for n in news_list if (now - pd.to_datetime(n['date'][:10])).days <= 7)
-                    c30 = sum(1 for n in news_list if (now - pd.to_datetime(n['date'][:10])).days <= 30)
-                    avg = c30 / 30 if c30 else 0
-                    news_velocity = c7 / (avg * 7) if avg else 1.0
-                    if news_velocity > CONFIG['NEWS_SPIKE_THRESHOLD']: news_spike = True
+                # RSI & ROC
+                c_a, c_b = st.columns(2)
+                with c_a:
+                    fig_rsi = go.Figure()
+                    fig_rsi.add_trace(go.Scatter(x=df.index[-100:], y=df['rsi'].iloc[-100:], line=dict(color='purple')))
+                    fig_rsi.add_hline(y=70, line_dash='dot', line_color='red')
+                    fig_rsi.add_hline(y=30, line_dash='dot', line_color='green')
+                    fig_rsi.update_layout(height=250, title="RSI 14", margin=dict(l=20, r=20, t=30, b=20))
+                    st.plotly_chart(fig_rsi, use_container_width=True)
+                with c_b:
+                    fig_roc = go.Figure(go.Bar(x=['10d', '21d', '63d'], y=res['metrics']['roc'], marker_color=['green' if x>0 else 'red' for x in res['metrics']['roc']]))
+                    fig_roc.update_layout(height=250, title="Momentum ROC", margin=dict(l=20, r=20, t=30, b=20))
+                    st.plotly_chart(fig_roc, use_container_width=True)
 
-                # --- SCORING SYSTEM ---
-                # Technical (0-100)
-                s_ema = 50 + min(35, ema_dist_pct * 3) if ema_dist_pct > 0 else 50 + max(-35, ema_dist_pct * 3)
-                s_rsi = 50 + (curr_rsi - 50) + (15 if rsi_div == 'bullish' else -15 if rsi_div == 'bearish' else 0)
-                s_mom = 75 if 'bullish' in mom_align else 25 if 'bearish' in mom_align else 50
-                
-                tech_score = (max(0, min(100, s_ema)) * CONFIG['W_EMA']) + \
-                             (max(0, min(100, s_rsi)) * CONFIG['W_RSI']) + \
-                             (max(0, min(100, s_mom)) * CONFIG['W_MOMENTUM'])
-                
-                # Adjust Sentiment with Spike
-                final_sent = sent_score + (10 if news_spike and sent_score > 60 else -10 if news_spike and sent_score < 40 else 0)
-                final_sent = max(0, min(100, final_sent))
-                
-                # Composite
-                raw_comp = (tech_score * CONFIG['W_TECHNICAL']) + (final_sent * CONFIG['W_SENTIMENT'])
-                
-                # Adjustments
-                adj_vol = 0.8 if vol_regime == 'extreme' else 1.0
-                adj_vlm = 1.1 if vol_pct > 80 else 0.9 if vol_pct < 20 else 1.0
-                
-                final_score = max(0, min(100, raw_comp * adj_vol * adj_vlm))
-                
-                # Signal
-                if final_score >= 80: signal = "STRONG BUY"
-                elif final_score >= 65: signal = "BUY"
-                elif final_score >= 45: signal = "NEUTRAL"
-                elif final_score >= 30: signal = "SELL"
-                else: signal = "STRONG SELL"
-                
-                confidence = 0.5 + (0.1 if 'aligned' in mom_align else 0) + (0.1 if vol_pct > 60 else 0) - (0.15 if vol_regime == 'extreme' else 0)
-                confidence = max(0.1, min(0.95, confidence))
-                
-                # --- EXPORT JSON ---
-                json_data = {
-                    "metadata": {
-                        "ticker": TICKER,
-                        "timestamp": datetime.now().isoformat(),
-                        "price": current_price
-                    },
-                    "scores": {
-                        "final": round(final_score, 2),
-                        "technical": round(tech_score, 2),
-                        "sentiment": round(final_sent, 2),
-                        "signal": signal,
-                        "confidence": round(confidence, 2)
-                    },
-                    "indicators": {
-                        "rsi": round(curr_rsi, 2),
-                        "ema_125": round(curr_ema, 2),
-                        "ema_dist_pct": round(ema_dist_pct, 2),
-                        "volume_percentile": round(vol_pct, 1),
-                        "volatility_regime": vol_regime,
-                        "hv_ratio": round(hv_ratio, 2)
-                    },
-                    "structure": {
-                        "range_52w_pos": round(pos_range, 1),
-                        "drawdown": round(curr_dd, 2)
-                    },
-                    "momentum": {
-                        "alignment": mom_align,
-                        "roc": {"10d": round(r10, 2), "21d": round(r21, 2), "63d": round(r63, 2)}
-                    },
-                    "news_metrics": {
-                        "velocity": round(news_velocity, 2),
-                        "spike": news_spike
-                    },
-                    "llm_analysis_prompt": {
-                        "context": f"Asset: {TICKER}. Price: {current_price}. Signal: {signal} (Score: {final_score:.1f}/100).",
-                        "details": f"Tech Score: {tech_score:.1f}, Sentiment: {final_sent:.1f}. Volatility: {vol_regime}. Momentum: {mom_align}.",
-                        "key_question": "Analizza la coerenza tra il segnale tecnico e il sentiment delle news recenti."
-                    }
-                }
-                
-                st.sidebar.download_button(
-                    label="📥 Download JSON per LLM Agent",
-                    data=json.dumps(json_data, indent=2),
-                    file_name=f"{TICKER}_kriterion_analysis.json",
-                    mime="application/json"
-                )
-
-                # --- UI DASHBOARD ---
-                # Row 1: KPI
-                c1, c2, c3, c4 = st.columns(4)
-                chg = ((current_price - df_ohlcv['close'].iloc[-2])/df_ohlcv['close'].iloc[-2])*100
-                c1.metric("Asset", TICKER, asset_info['name'])
-                c2.metric("Prezzo", f"{current_price:.2f}", f"{chg:+.2f}%")
-                c3.metric("Signal", signal, f"Conf: {confidence:.0%}")
-                c4.metric("Volatilità", vol_regime.upper(), f"HV Ratio: {hv_ratio:.2f}")
+            with t2:
+                # FACTORS
+                f1, f2, f3 = st.columns(3)
+                with f1: 
+                    st.markdown("#### ✅ Bullish Factors")
+                    for f in res['factors']['bullish']: st.markdown(f"<div class='factor-box bullish'>{f}</div>", unsafe_allow_html=True)
+                with f2:
+                    st.markdown("#### ⚠️ Bearish Factors")
+                    for f in res['factors']['bearish']: st.markdown(f"<div class='factor-box bearish'>{f}</div>", unsafe_allow_html=True)
+                with f3:
+                    st.markdown("#### ➖ Neutral Factors")
+                    for f in res['factors']['neutral']: st.markdown(f"<div class='factor-box neutral'>{f}</div>", unsafe_allow_html=True)
                 
                 st.markdown("---")
                 
-                # Row 2: Gauges & Structure (FIX: WIDTH='STRETCH' INVECE DI USE_CONTAINER_WIDTH)
-                g1, g2, g3 = st.columns([1, 1, 2])
-                with g1:
-                    fig = go.Figure(go.Indicator(
-                        mode="gauge+number", value=final_score, title={'text': "Composite Score"},
-                        gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#1a73e8"},
-                               'steps': [{'range': [0, 30], 'color': '#ef5350'}, {'range': [65, 100], 'color': '#66bb6a'}]}
-                    ))
-                    fig.update_layout(height=250, margin=dict(t=30, b=10, l=20, r=20))
-                    st.plotly_chart(fig, width="stretch")
-                with g2:
-                    fig = go.Figure(go.Indicator(
-                        mode="gauge+number", value=final_sent, title={'text': "Sentiment Score"},
-                        gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#ab47bc"}}
-                    ))
-                    fig.update_layout(height=250, margin=dict(t=30, b=10, l=20, r=20))
-                    st.plotly_chart(fig, width="stretch")
-                with g3:
-                    st.subheader("Posizione Range 52 Settimane")
-                    st.progress(int(pos_range))
-                    c_r1, c_r2, c_r3 = st.columns(3)
-                    c_r1.write(f"Low: {low_52:.2f}")
-                    c_r2.write(f"**{pos_range:.1f}%**")
-                    c_r3.write(f"High: {high_52:.2f}")
-                    st.info(f"Drawdown Attuale: {curr_dd:.2f}% | Max DD 1Y: {dd_df['drawdown_pct'].min():.2f}%")
-                
-                # Row 3: Charts (FIX: WIDTH='STRETCH')
-                st.subheader("Analisi Tecnica")
-                
-                # Price Chart
-                fig_p = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
-                fig_p.add_trace(go.Candlestick(x=df_ohlcv.index, open=df_ohlcv['open'], high=df_ohlcv['high'], 
-                                               low=df_ohlcv['low'], close=df_ohlcv['close'], name='Price'), row=1, col=1)
-                fig_p.add_trace(go.Scatter(x=df_ohlcv.index, y=df_ohlcv['ema_125'], line=dict(color='orange'), name='EMA 125'), row=1, col=1)
-                colors = ['green' if c>=o else 'red' for c,o in zip(df_ohlcv['close'], df_ohlcv['open'])]
-                fig_p.add_trace(go.Bar(x=df_ohlcv.index, y=df_ohlcv['volume'], marker_color=colors, name='Vol'), row=2, col=1)
-                fig_p.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=20, r=20, t=20, b=20))
-                st.plotly_chart(fig_p, width="stretch")
-                
-                # Indicators Row (FIX: WIDTH='STRETCH')
-                i1, i2 = st.columns(2)
-                with i1:
-                    st.markdown("##### RSI & Zone")
-                    fig_rsi = go.Figure()
-                    fig_rsi.add_trace(go.Scatter(x=df_ohlcv.index[-150:], y=df_ohlcv['rsi'].iloc[-150:], line=dict(color='purple')))
-                    fig_rsi.add_hline(y=70, line_dash='dot', line_color='red')
-                    fig_rsi.add_hline(y=30, line_dash='dot', line_color='green')
-                    fig_rsi.update_layout(height=250, margin=dict(l=20, r=20, t=20, b=20))
-                    st.plotly_chart(fig_rsi, width="stretch")
-                with i2:
-                    st.markdown("##### Momentum ROC")
-                    fig_roc = go.Figure(go.Bar(x=['10d', '21d', '63d'], y=[r10, r21, r63], 
-                                              marker_color=['green' if x>0 else 'red' for x in [r10, r21, r63]]))
-                    fig_roc.update_layout(height=250, margin=dict(l=20, r=20, t=20, b=20))
-                    st.plotly_chart(fig_roc, width="stretch")
-                
-                # News (CORRETTO TYPE ERROR E LOGICA DICT)
-                if news_list:
-                    st.subheader(f"Ultime News ({len(news_list)})")
-                    for n in news_list[:5]:
-                        # Estrazione sicura del valore sentiment per l'emoji
-                        sent_obj = n.get('sentiment')
-                        val_float = extract_sentiment_value(sent_obj)
-                        
-                        emoji = "🟢" if val_float > 0.5 else "🔴" if val_float < -0.5 else "⚪"
-                        
-                        with st.expander(f"{emoji} {n['date'][:10]} | {n['title']}"):
-                            st.write(f"Fonte: **{n['source']}**")
-                            st.write(n.get('content', 'Nessun contenuto disponibile.'))
-                            st.markdown(f"[Leggi articolo originale]({n['link']})")
+                # DETAILED METRICS TABLE
+                st.subheader("📋 Detailed Metrics")
+                col_m1, col_m2 = st.columns(2)
+                with col_m1:
+                    st.markdown("**Technical Data**")
+                    st.write(f"EMA 125 Dist: **{res['metrics']['ema_dist']:.2f}%**")
+                    st.write(f"RSI 14: **{res['metrics']['rsi']:.1f}** ({res['metrics']['rsi_zone']})")
+                    st.write(f"Volume Pct: **{res['metrics']['vol_pct']:.1f}%**")
+                with col_m2:
+                    st.markdown("**Risk Data**")
+                    st.write(f"Drawdown: **{res['metrics']['dd']:.2f}%**")
+                    st.write(f"HV Ratio: **{res['metrics']['hv_ratio']:.2f}**")
+                    st.write(f"News Velocity: **{res['news_metrics']['velocity']:.2f}x**")
 
-        st.caption("Kriterion Quant Dashboard v2.0 - Powered by EODHD API")
+            # --- JSON EXPORT ---
+            json_export = {
+                'metadata': {'ticker': TICKER, 'timestamp': datetime.now().isoformat()},
+                'analysis': res,
+                'llm_prompt': f"Analizza {TICKER}. Signal {res['signal']} ({res['scores']['final']}/100). {res['narrative']}"
+            }
+            st.sidebar.download_button("📥 Download JSON per LLM", json.dumps(json_export, indent=2), f"{TICKER}_analysis.json", "application/json")
+            
+            # --- NEWS SECTION ---
+            if news:
+                st.markdown("### 📰 Recent News")
+                for n in news[:5]:
+                    score_val = float(n.get('sentiment', {}).get('normalized', 0)) if isinstance(n.get('sentiment'), dict) else 0
+                    color = "🟢" if score_val > 0.5 else "🔴" if score_val < -0.5 else "⚪"
+                    with st.expander(f"{color} {n['date'][:10]} | {n['title']}"):
+                        st.write(n.get('content', ''))
+                        st.markdown(f"[Leggi articolo]({n['link']})")
+                        
+        else:
+            st.error("Dati non trovati o insufficienti.")
