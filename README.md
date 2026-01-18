@@ -1,10 +1,14 @@
 # Kriterion Quant - Financial Sentiment Analysis Dashboard
 
-Questa repository ospita una dashboard Streamlit per l'analisi quantitativa e di sentiment di asset finanziari, basata sul progetto Kriterion Quant.
+Dashboard professionale per l'analisi quantitativa e di sentiment, sviluppata in Python e Streamlit.
 
-## Setup
+## Deploy su Streamlit Cloud
 
-1. Clona il repository.
-2. Crea un ambiente virtuale e installa le dipendenze:
-   ```bash
-   pip install -r requirements.txt
+Questa applicazione è configurata per leggere le API Key direttamente dai Secrets dell'ambiente Cloud, garantendo la massima sicurezza.
+
+1.  Fai il Fork/Clone di questo repository su GitHub.
+2.  Vai su [Streamlit Cloud](https://streamlit.io/cloud) e crea una nuova app collegata al tuo repository.
+3.  Nelle "Advanced Settings" dell'app su Streamlit Cloud, inserisci il seguente secret nell'area **Secrets**:
+
+```toml
+EODHD_API_KEY = "LA_TUA_CHIAVE_API_EODHD"
