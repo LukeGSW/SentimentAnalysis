@@ -20,7 +20,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS per avvicinare lo stile a quello del notebook e pulire la UI
+# CSS
 st.markdown("""
 <style>
     .stMetric {
@@ -36,6 +36,14 @@ st.markdown("""
     h1, h2, h3 {
         color: #1a73e8;
     }
+    .badge-guide {
+        background-color: #e8f0fe;
+        color: #174ea6;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 0.9em;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -43,16 +51,14 @@ st.markdown("""
 # 2. SETUP API E PARAMETRI
 # ============================================================================
 
-# Recupero API Key dai Secrets di Streamlit Cloud
+# Recupero API Key
 if "EODHD_API_KEY" not in st.secrets:
     st.error("❌ ERRORE CRITICO: EODHD_API_KEY non trovata nei secrets dell'app.")
-    st.info("Configura la chiave nelle impostazioni di Streamlit Cloud.")
     st.stop()
 
 EODHD_API_KEY = st.secrets["EODHD_API_KEY"]
 EODHD_BASE_URL = "https://eodhd.com/api"
 
-# Parametri di default (Esatti dal Notebook)
 CONFIG = {
     'EMA_PERIOD': 125,
     'RSI_PERIOD': 14,
@@ -85,7 +91,7 @@ EXCHANGE_MAP = {
 }
 
 # ============================================================================
-# 3. FUNZIONI DI CALCOLO E FETCHING (LOGICA REPLICATA)
+# 3. FUNZIONI DI CALCOLO E FETCHING
 # ============================================================================
 
 def validate_ticker(ticker: str) -> Tuple[bool, str, Dict]:
@@ -154,7 +160,7 @@ def fetch_news_data(ticker: str, limit: int) -> Optional[List[Dict]]:
         data = api_request_with_retry(url, params)
     return data if data else None
 
-# Indicatori Tecnici
+# --- Indicatori Tecnici ---
 def calculate_ema(series: pd.Series, period: int) -> pd.Series:
     return series.ewm(span=period, adjust=False).mean()
 
@@ -170,7 +176,6 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
 def calculate_volume_percentile(volume_series: pd.Series, lookback: int = 252) -> Tuple[float, pd.Series]:
     available_days = min(lookback, len(volume_series))
     percentiles = pd.Series(index=volume_series.index, dtype=float)
-    # Calcolo ottimizzato per performance
     vals = volume_series.values
     for i in range(available_days, len(vals) + 1):
         window = vals[max(0, i-available_days):i]
@@ -195,7 +200,23 @@ def calculate_drawdown(close: pd.Series) -> pd.DataFrame:
     dd_pct = (dd / running_max) * 100
     return pd.DataFrame({'running_max': running_max, 'drawdown': dd, 'drawdown_pct': dd_pct})
 
-# Helper per interpretazione
+# --- Helper Sentiment ---
+def extract_sentiment_value(raw_value) -> float:
+    """Estrae in modo sicuro un valore float dal sentiment, gestendo dict o float puri."""
+    try:
+        if isinstance(raw_value, dict):
+            # Cerca chiavi comuni usate da EODHD
+            return float(raw_value.get('normalized', raw_value.get('polarity', raw_value.get('score', 0))))
+        elif raw_value is not None:
+            return float(raw_value)
+    except (ValueError, TypeError):
+        pass
+    return 0.0
+
+def normalize_sentiment(score) -> float:
+    return round(((max(-1, min(1, score)) - (-1)) / 2) * 100, 1)
+
+# --- Helper Classificazione ---
 def classify_volatility_regime(atr_p: float, hv_p: float) -> str:
     if atr_p > 90 or hv_p > 90: return "extreme"
     elif atr_p > 70 or hv_p > 70: return "high"
@@ -214,17 +235,11 @@ def detect_rsi_divergence(price, rsi, lookback=14):
     price_prev = price.iloc[-lookback*2:-lookback]
     rsi_prev = rsi.iloc[-lookback*2:-lookback]
     
-    # Bullish: Lower Low Price, Higher Low RSI
     if price_recent.min() < price_prev.min() and rsi.loc[price_recent.idxmin()] > rsi.loc[price_prev.idxmin()]:
         return "bullish"
-    # Bearish: Higher High Price, Lower High RSI
     if price_recent.max() > price_prev.max() and rsi.loc[price_recent.idxmax()] < rsi.loc[price_prev.idxmax()]:
         return "bearish"
     return "none"
-
-def normalize_sentiment(score):
-    if score is None: return 50.0
-    return round(((max(-1, min(1, float(score))) - (-1)) / 2) * 100, 1)
 
 # ============================================================================
 # 4. APP PRINCIPALE
@@ -232,9 +247,24 @@ def normalize_sentiment(score):
 
 st.sidebar.title("Kriterion Quant")
 st.sidebar.caption("Financial Sentiment Dashboard v2.0")
+
+# --- LEGGENDA SIDEBAR AGGIUNTA ---
+with st.sidebar.expander("ℹ️ Guida Suffissi Ticker", expanded=False):
+    st.markdown("""
+    **Formato:** `SIMBOLO.EXCHANGE`
+    
+    * 🇺🇸 **US Stock:** `.US` (es. `AAPL.US`)
+    * 🇮🇹 **Milano:** `.MI` (es. `ENI.MI`, `UCG.MI`)
+    * 🇩🇪 **Francoforte:** `.F` (es. `SAP.F`)
+    * 🇫🇷 **Parigi:** `.PA` (es. `OR.PA`)
+    * 🇬🇧 **Londra:** `.L` (es. `RR.L`)
+    * ₿ **Crypto:** `.CC` (es. `BTC-USD.CC`)
+    * 📈 **Indici:** `.INDX` (es. `GSPC.INDX`)
+    """)
+
 st.sidebar.markdown("---")
 
-TICKER = st.sidebar.text_input("Inserisci Ticker (es. AAPL.US, ENI.MI):", value="AAPL.US").strip().upper()
+TICKER = st.sidebar.text_input("Inserisci Ticker:", value="AAPL.US").strip().upper()
 
 if TICKER:
     is_valid, err, asset_info = validate_ticker(TICKER)
@@ -299,14 +329,13 @@ if TICKER:
                 dd_df = calculate_drawdown(df_ohlcv['close'])
                 curr_dd = dd_df['drawdown_pct'].iloc[-1]
                 
-                # Sentiment Processing
-                raw_sent = 0
+                # Sentiment Processing (CORRETTO TYPE ERROR)
+                raw_sent_val = 0.0
                 sent_score = 50.0
-                if sent_data and isinstance(sent_data, dict):
+                if sent_data:
                     val = sent_data.get('sentiment', sent_data.get('score', sent_data.get('normalized')))
-                    if val is not None:
-                        raw_sent = float(val)
-                        sent_score = normalize_sentiment(raw_sent)
+                    raw_sent_val = extract_sentiment_value(val)
+                    sent_score = normalize_sentiment(raw_sent_val)
                 
                 # News Velocity
                 news_spike = False
@@ -411,7 +440,7 @@ if TICKER:
                 
                 st.markdown("---")
                 
-                # Row 2: Gauges & Structure
+                # Row 2: Gauges & Structure (FIX: WIDTH='STRETCH' INVECE DI USE_CONTAINER_WIDTH)
                 g1, g2, g3 = st.columns([1, 1, 2])
                 with g1:
                     fig = go.Figure(go.Indicator(
@@ -420,14 +449,14 @@ if TICKER:
                                'steps': [{'range': [0, 30], 'color': '#ef5350'}, {'range': [65, 100], 'color': '#66bb6a'}]}
                     ))
                     fig.update_layout(height=250, margin=dict(t=30, b=10, l=20, r=20))
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
                 with g2:
                     fig = go.Figure(go.Indicator(
                         mode="gauge+number", value=final_sent, title={'text': "Sentiment Score"},
                         gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#ab47bc"}}
                     ))
                     fig.update_layout(height=250, margin=dict(t=30, b=10, l=20, r=20))
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
                 with g3:
                     st.subheader("Posizione Range 52 Settimane")
                     st.progress(int(pos_range))
@@ -437,7 +466,7 @@ if TICKER:
                     c_r3.write(f"High: {high_52:.2f}")
                     st.info(f"Drawdown Attuale: {curr_dd:.2f}% | Max DD 1Y: {dd_df['drawdown_pct'].min():.2f}%")
                 
-                # Row 3: Charts
+                # Row 3: Charts (FIX: WIDTH='STRETCH')
                 st.subheader("Analisi Tecnica")
                 
                 # Price Chart
@@ -448,9 +477,9 @@ if TICKER:
                 colors = ['green' if c>=o else 'red' for c,o in zip(df_ohlcv['close'], df_ohlcv['open'])]
                 fig_p.add_trace(go.Bar(x=df_ohlcv.index, y=df_ohlcv['volume'], marker_color=colors, name='Vol'), row=2, col=1)
                 fig_p.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=20, r=20, t=20, b=20))
-                st.plotly_chart(fig_p, use_container_width=True)
+                st.plotly_chart(fig_p, width="stretch")
                 
-                # Indicators Row
+                # Indicators Row (FIX: WIDTH='STRETCH')
                 i1, i2 = st.columns(2)
                 with i1:
                     st.markdown("##### RSI & Zone")
@@ -459,20 +488,24 @@ if TICKER:
                     fig_rsi.add_hline(y=70, line_dash='dot', line_color='red')
                     fig_rsi.add_hline(y=30, line_dash='dot', line_color='green')
                     fig_rsi.update_layout(height=250, margin=dict(l=20, r=20, t=20, b=20))
-                    st.plotly_chart(fig_rsi, use_container_width=True)
+                    st.plotly_chart(fig_rsi, width="stretch")
                 with i2:
                     st.markdown("##### Momentum ROC")
                     fig_roc = go.Figure(go.Bar(x=['10d', '21d', '63d'], y=[r10, r21, r63], 
                                               marker_color=['green' if x>0 else 'red' for x in [r10, r21, r63]]))
                     fig_roc.update_layout(height=250, margin=dict(l=20, r=20, t=20, b=20))
-                    st.plotly_chart(fig_roc, use_container_width=True)
+                    st.plotly_chart(fig_roc, width="stretch")
                 
-                # News
+                # News (CORRETTO TYPE ERROR E LOGICA DICT)
                 if news_list:
                     st.subheader(f"Ultime News ({len(news_list)})")
                     for n in news_list[:5]:
-                        sent_val = n.get('sentiment')
-                        emoji = "🟢" if sent_val and float(sent_val) > 0.5 else "🔴" if sent_val and float(sent_val) < -0.5 else "⚪"
+                        # Estrazione sicura del valore sentiment per l'emoji
+                        sent_obj = n.get('sentiment')
+                        val_float = extract_sentiment_value(sent_obj)
+                        
+                        emoji = "🟢" if val_float > 0.5 else "🔴" if val_float < -0.5 else "⚪"
+                        
                         with st.expander(f"{emoji} {n['date'][:10]} | {n['title']}"):
                             st.write(f"Fonte: **{n['source']}**")
                             st.write(n.get('content', 'Nessun contenuto disponibile.'))
