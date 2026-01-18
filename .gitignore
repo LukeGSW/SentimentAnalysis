@@ -4,6 +4,8 @@ __pycache__/
 
 # Streamlit
 .streamlit/
+packages.txt
 
-# Environment variables
+# Environment
 .env
+.venv
