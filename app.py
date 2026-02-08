@@ -1773,16 +1773,15 @@ def main():
         st.info(f"📊 Analisi in corso per **{ticker_input}** ({asset_info['name']})...")
         
         # Esegui analisi
+# Esegui analisi
         json_export, dashboard_data, ohlcv_data = run_analysis(ticker_input, asset_info)
         
         if json_export is None:
             st.stop()
         
-        # Pulsante download JSON nella sidebar
-        json_string = json.dumps(json_export, indent=2, ensure_ascii=False)
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-        ticker_clean = ticker_input.replace('.', '_').replace('-', '_')
-        json_filename = f"{ticker_clean}_{timestamp}_analysis_data.json"
+        # --- NUOVA IMPLEMENTAZIONE DOWNLOAD ---
+        json_string = prepare_json_download(json_export)
+        json_filename = generate_filename(ticker_input)
         
         json_download_placeholder.download_button(
             label="📥 Download JSON",
@@ -1791,6 +1790,7 @@ def main():
             mime="application/json",
             use_container_width=True
         )
+        # --------------------------------------
         
         # =====================================================================
         # DASHBOARD
