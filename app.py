@@ -15,7 +15,7 @@ import requests
 from typing import Dict, List, Optional, Tuple, Any
 import warnings
 import time
-
+from data_exporter import prepare_json_download, generate_filename # <--- Nuovo import
 warnings.filterwarnings('ignore')
 
 # Visualization
